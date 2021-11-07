@@ -22,6 +22,8 @@ python main_mem.py --env PongNoFrameskip-v4
 ```
 check log training in /runs
 - testing  
-use **--evaluate**  
+```
+python main_mem.py --evaluation_interval  10  --evaluate --render --env PongNoFrameskip-v4 --episode-life 0 --seed 0
+``` 
 
 
