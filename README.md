@@ -9,6 +9,10 @@ code reference:
 - torch 1.4
 - Install gym[atari] https://gym.openai.com/envs/#atari
 
+```
+mkdir model
+mkdir runs
+```
 
 # Atari
 
