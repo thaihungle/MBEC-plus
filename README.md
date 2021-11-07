@@ -15,11 +15,13 @@ mkdir runs
 ```
 
 # Atari
-training
+
+- training
 ``` 
 python main_mem.py --env PongNoFrameskip-v4
 ```
-testing  
-use **--evaluate**
+check log training in /runs
+- testing  
+use **--evaluate**  
 
 
