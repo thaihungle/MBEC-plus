@@ -74,7 +74,7 @@ class DQNBase(nn.Module):
         self.num_inputs = self.input_shape[0]
         self.num_actions = env.action_space.n
         self.noisy = noisy
-        self.use_mem = False
+        self.use_mem = args.use_mem
         self.model_name = args.model_name
         self.num_warm_up = args.num_warm_up
         self.gamma = args.gamma
@@ -114,34 +114,33 @@ class DQNBase(nn.Module):
                 nn.ReLU())
 
 
-        if args.use_mem==1:
-            self.use_mem = True
-            self.emb_index2count = {}
-            self.replay_buffer = args.replay_buffer
-            self.proj = nn.Linear(self._feature_size(), 32)
 
-            self.beta = nn.Parameter(torch.tensor(0.0),
-                                     requires_grad=True)
-            self.fix_beta = args.fix_beta
-            self.beta_net = nn.Linear(args.hidden_size, 1)
-            self.feature_size = 32
-            self.random_map = nn.Sequential(
-                nn.Linear(args.hidden_size, args.mem_dim),
-            )
+        self.emb_index2count = {}
+        self.replay_buffer = args.replay_buffer
+        self.proj = nn.Linear(self._feature_size(), 32)
 
-            for param in self.random_map.parameters():
-                param.requires_grad = False
+        self.beta = nn.Parameter(torch.tensor(0.0),
+                                 requires_grad=True)
+        self.fix_beta = args.fix_beta
+        self.beta_net = nn.Linear(args.hidden_size, 1)
+        self.feature_size = 32
+        self.random_map = nn.Sequential(
+            nn.Linear(args.hidden_size, args.mem_dim),
+        )
 
-            self.trjmem = trjmem.TrjMemory(inverse_distance, num_neighbors=args.k, max_memory=args.memory_size, lr=args.write_lr)
-            self.trj_model = controller.LSTMController(self.feature_size + self.num_actions, args.hidden_size, num_layers=1)
-            self.trj_out = nn.Linear(args.hidden_size, self.feature_size + self.num_actions +1)
-            self.reward_model = nn.Sequential(
-                nn.Linear(self.feature_size + self.num_actions + args.hidden_size, args.batch_size_reward),
-                nn.ReLU(),
-                nn.Linear(args.batch_size_reward, args.batch_size_reward),
-                nn.ReLU(),
-                nn.Linear(args.batch_size_reward, 1),
-            )
+        for param in self.random_map.parameters():
+            param.requires_grad = False
+
+        self.trjmem = trjmem.TrjMemory(inverse_distance, num_neighbors=args.k, max_memory=args.memory_size, lr=args.write_lr)
+        self.trj_model = controller.LSTMController(self.feature_size + self.num_actions, args.hidden_size, num_layers=1)
+        self.trj_out = nn.Linear(args.hidden_size, self.feature_size + self.num_actions +1)
+        self.reward_model = nn.Sequential(
+            nn.Linear(self.feature_size + self.num_actions + args.hidden_size, args.batch_size_reward),
+            nn.ReLU(),
+            nn.Linear(args.batch_size_reward, args.batch_size_reward),
+            nn.ReLU(),
+            nn.Linear(args.batch_size_reward, 1),
+        )
 
 
 
@@ -154,12 +153,13 @@ class DQNBase(nn.Module):
         self.apply(weights_init)
 
     def clone_mem(self, target):
-        target.trj_model.load_state_dict(self.trj_model.state_dict())
-        target.trj_out.load_state_dict(self.trj_out.state_dict())
-        target.trjmem = self.trjmem
-        target.beta = self.beta
-        target.emb_index2count = self.emb_index2count
-        target.replay_buffer = self.replay_buffer
+        if self.use_mem:
+            target.trj_model.load_state_dict(self.trj_model.state_dict())
+            target.trj_out.load_state_dict(self.trj_out.state_dict())
+            target.trjmem = self.trjmem
+            target.beta = self.beta
+            target.emb_index2count = self.emb_index2count
+            target.replay_buffer = self.replay_buffer
 
     def forward(self, x, h_trj=None, episode=0, use_mem=1.0, target=0, r=None, a=None, is_learning=False):
 
@@ -169,7 +169,7 @@ class DQNBase(nn.Module):
             x = self.features(x)
             x = self.flatten(x)
             x = self.fc(x)
-        return x
+        return x, x, x, x
     
     def _feature_size(self):
         return self.features(torch.zeros(1, *self.input_shape)).view(1, -1).size(1)
@@ -420,7 +420,10 @@ class DQNBase(nn.Module):
                     action_s = qs.max(1)[1].item()
                     action_e = qe.max(1)[1].item()
                 else:
-                    q_value = self.forward(state)
+                    x = self.features(state)
+                    x = self.flatten(x)
+                    x = self.proj(x)
+                    q_value, _,_,_ = self.forward(state)
                 action  = q_value.max(1)[1].item()
 
                 if action_e is not None:
@@ -432,18 +435,15 @@ class DQNBase(nn.Module):
         else:
             x = self.features(state)
             x = self.flatten(x)
-            if self.use_mem:
-                x = self.proj(x)
+            x = self.proj(x)
 
             action = random.randrange(self.num_actions)
 
 
-        if self.use_mem:
 
-            y_trj, h_trj = self.trj_model(self.make_trj_input(x, action), h_trj)
-            return action, h_trj, y_trj
+        y_trj, h_trj = self.trj_model(self.make_trj_input(x, action), h_trj)
+        return action, h_trj, y_trj
 
-        return action
 
     def get_pivot_lastinsert(self):
         if len(self.last_inserts)>0:

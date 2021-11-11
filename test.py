@@ -58,10 +58,10 @@ def test(env, args, current_model=None):
 
         state = env.reset()
 
-        if args.use_mem == 1:
-            br = current_model.bstr_rate
-            #current_model.bstr_rate = 0
-            h_trj = current_model.trj_model.create_new_state(1)
+
+        br = current_model.bstr_rate
+        #current_model.bstr_rate = 0
+        h_trj = current_model.trj_model.create_new_state(1)
 
         step=0
         imgs = []
@@ -111,11 +111,9 @@ def test(env, args, current_model=None):
                     imgs.append(img)
 
 
-            if args.use_mem == 0:
-                action = current_model.act(torch.FloatTensor(state).to(args.device), 0.)
-            else:
-                action, h_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), 0, h_trj,
-                                                          episode=1000000)
+
+            action, h_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), 0, h_trj,
+                                                      episode=1000000)
 
             next_state, reward, done, _ = env.step(action)
 
@@ -125,8 +123,6 @@ def test(env, args, current_model=None):
             step+=1
             # print(episode_length, episode_reward)
             if done:
-                if args.use_mem == 1:
-                    current_model.bstr_rate = br
                 break
         if args.save_render and episode_reward==3:
             pimg = np.asarray(imgs)
@@ -162,16 +158,14 @@ def test_online(env, args, current_model, numt=100):
         state = env.reset()
         rewards = []
         lens = []
-        if args.use_mem==1:
-            h_trj = current_model.trj_model.create_new_state(1)
+
+        h_trj = current_model.trj_model.create_new_state(1)
         while True:
             if args.render and n==numt-1:
                 env.render()
-            if args.use_mem==0:
-                action = current_model.act(torch.FloatTensor(state).to(args.device), 0.)
-            else:
-                action, nh_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), 0, h_trj,
-                                                          episode=1000000)
+
+            action, nh_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), 0, h_trj,
+                                                      episode=1000000)
 
             next_state, reward, done, _ = env.step(action)
 

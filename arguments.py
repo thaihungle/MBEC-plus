@@ -23,7 +23,7 @@ def get_args():
                        help='Number of frames per episode')
     parser.add_argument('--buffer-size', type=int, default=1000000, metavar='CAPACITY',
                         help='Maximum memory buffer size')
-    parser.add_argument('--update-target', type=int, default=10000, metavar='STEPS',
+    parser.add_argument('--update-target', type=int, default=5000, metavar='STEPS',
                         help='Interval of target network update')
     parser.add_argument('--train-freq', type=int, default=4, metavar='STEPS',
                         help='Number of steps between optimization step')

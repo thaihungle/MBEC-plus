@@ -45,8 +45,9 @@ def train(env, env_test, args, writer):
 
     optimizer = optim.Adam(current_model.parameters(), lr=args.lr, eps=1e-4)
     # optimizer = optim.RMSprop(current_model.parameters(), lr=0.000625, alpha=0.95, momentum=0.95, eps=0.01)
-    optimizer_rec = optim.Adam(current_model.parameters(), lr=args.lr)
-    optimizer_reward = optim.Adam(current_model.reward_model.parameters())
+    if args.use_mem:
+        optimizer_rec = optim.Adam(current_model.parameters(), lr=args.lr)
+        optimizer_reward = optim.Adam(current_model.reward_model.parameters())
 
 
 
@@ -128,7 +129,7 @@ def train(env, env_test, args, writer):
             if add_mem == 1:
                 current_model.trjmem.commit_insert()
 
-            if frame_idx < args.rec_period:
+            if args.use_mem and frame_idx < args.rec_period:
                 l2 = current_model.compute_reward_loss(h_trj, traj_buffer, optimizer_reward, args.batch_size_reward,
                                                noise=0)
                 rec_l2s.append(l2.data.item())
@@ -170,7 +171,7 @@ def train(env, env_test, args, writer):
             current_model.m_contr = []
             target_model.m_contr = []
         else:
-            if frame_idx % args.write_interval == 0 and len(traj_buffer):
+            if args.use_mem and frame_idx % args.write_interval == 0 and len(traj_buffer):
                 state_buffer.append(((h_trj[0].detach().cpu().numpy(),h_trj[1].detach().cpu().numpy()), episode_reward, episode_length))
                 if args.rec_rate>0:
                     l2 = current_model.compute_reward_loss(h_trj, traj_buffer, optimizer_reward, args.batch_size_reward,
