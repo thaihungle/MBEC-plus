@@ -83,6 +83,7 @@ class DQNBase(nn.Module):
         self.bstr_rate = args.bstr_rate
         self.mem_mode = args.mem_mode
         self.m_contr = []
+        self.read_interval_rate = args.read_interval_rate
 
 
         if noisy:
@@ -116,22 +117,18 @@ class DQNBase(nn.Module):
 
 
         self.emb_index2count = {}
-        self.replay_buffer = args.replay_buffer
         self.proj = nn.Linear(self._feature_size(), 32)
-
-        self.beta = nn.Parameter(torch.tensor(0.0),
-                                 requires_grad=True)
         self.fix_beta = args.fix_beta
         self.beta_net = nn.Linear(args.hidden_size, 1)
         self.feature_size = 32
         self.random_map = nn.Sequential(
-            nn.Linear(args.hidden_size, args.mem_dim),
+            nn.Linear(args.hidden_size, args.mem_dim)
         )
 
         for param in self.random_map.parameters():
             param.requires_grad = False
 
-        self.trjmem = trjmem.TrjMemory(inverse_distance, num_neighbors=args.k, max_memory=args.memory_size, lr=args.write_lr)
+        self.trjmem = trjmem.TrjMemory(args.mem_dim, num_neighbors=args.k, max_memory=args.memory_size, lr=args.write_lr)
         self.trj_model = controller.LSTMController(self.feature_size + self.num_actions, args.hidden_size, num_layers=1)
         self.trj_out = nn.Linear(args.hidden_size, self.feature_size + self.num_actions +1)
         self.reward_model = nn.Sequential(
@@ -153,44 +150,40 @@ class DQNBase(nn.Module):
         self.apply(weights_init)
 
     def clone_mem(self, target):
-        if self.use_mem:
-            target.trj_model.load_state_dict(self.trj_model.state_dict())
-            target.trj_out.load_state_dict(self.trj_out.state_dict())
-            target.trjmem = self.trjmem
-            target.beta = self.beta
-            target.emb_index2count = self.emb_index2count
-            target.replay_buffer = self.replay_buffer
+        target.trjmem = self.trjmem
+        target.emb_index2count = self.emb_index2count
 
-    def forward(self, x, h_trj=None, episode=0, use_mem=1.0, target=0, r=None, a=None, is_learning=False):
+    def forward(self, x, h_trj=None, episode=0, use_mem=1.0, r=None, a=None, is_learning=False):
 
         if self.use_mem:
-            return self.forward_mem(x, h_trj, episode=episode, use_mem=1.0, target=0,r=r, a=a, is_learning=is_learning)
+            return self.forward_mem(x, h_trj, episode=episode, use_mem=use_mem, r=r, a=a, is_learning=is_learning)
         else:
             x = self.features(x)
             x = self.flatten(x)
             x = self.fc(x)
-        return x, x, x, x
+            return x, x, x, x
     
     def _feature_size(self):
         return self.features(torch.zeros(1, *self.input_shape)).view(1, -1).size(1)
 
-    def forward_mem_feature(self, x, h_trj, episode=0, use_mem=1.0, target=0, r=None, a=None, is_learning=False):
+    def forward_mem_feature(self, x, h_trj, episode=0, use_mem=1.0, r=None, a=None, is_learning=False):
         q_episodic = torch.zeros(x.shape[0], self.num_actions)
         if USE_CUDA:
             q_episodic = q_episodic.cuda()
         if episode > self.num_warm_up and random.random() < use_mem and self.trjmem.get_mem_size() > 1:
-
+      
             if a is not None:
-                _, h_trj_a = self.trj_model(self.make_trj_input(x, a), h_trj)
-                q_episodic[:, a] = r+ self.gamma*self.episodic_net(h_trj_a, is_learning)
+                y_a, h_trj_a = self.trj_model(self.make_trj_input(x, a), h_trj)
+                q_episodic[:, a] = r + self.gamma*self.episodic_net(h_trj_a, is_learning)
             else:
                 for a in range(self.num_actions):
-                    lxx, h_trj_a = self.trj_model(self.make_trj_input(x, a), h_trj)
+                    
+                    y_a, h_trj_a = self.trj_model(self.make_trj_input(x, a), h_trj)
                     if r is None:
                         r = self.reward_model(
-                            torch.cat([self.make_trj_input(x, a), h_trj[0][0].detach()], dim=-1))
+                            torch.cat([self.make_trj_input(x, a), h_trj[0][0]], dim=-1))
 
-                    r = r.to(device=lxx.device).squeeze(-1)
+                    r = r.to(device=y_a.device).squeeze(-1)
                     q_episodic[:, a] = r + self.gamma*self.episodic_net(h_trj_a, is_learning)
 
                 if is_learning is False and random.random()<self.bstr_rate:#REFINE
@@ -214,31 +207,27 @@ class DQNBase(nn.Module):
 
         return q_episodic, b,  x
 
-    def forward_mem(self, x, h_trj, episode=0, use_mem=1.0, target=0, r=None, a=None, is_learning=False):
+    def forward_mem(self, x, h_trj, episode=0, use_mem=1.0, r=None, a=None, is_learning=False):
         x = self.features(x)
         x = self.flatten(x)
-        q_value_semantic = self.semantic_net(x, None, target)
+        q_value_semantic = self.semantic_net(x, None)
         if self.use_mem:
             x = self.proj(x)
 
-        q_episodic, b ,x =  self.forward_mem_feature(x, h_trj, episode, use_mem, target, r=r, a=a, is_learning=is_learning)
+        # if is_learning:
+        q_episodic, b ,x =  self.forward_mem_feature(x, h_trj, episode, use_mem, r=r, a=a, is_learning=is_learning)
+     
         return q_episodic * b + q_value_semantic, q_value_semantic, q_episodic, x
+        # return q_value_semantic, q_value_semantic, q_value_semantic, x
 
 
 
-    def semantic_net(self, x, h_trj = None, q_episodic=0, target=0):
-        if h_trj is not None:
-            x = self.proj(x)
-            _, h_trj = self.trj_model(self.make_trj_input(x, None), h_trj)
-            q = self.fc(h_trj[0][0])
-        else:
-            q = self.fc(x)
+    def semantic_net(self, x, h_trj = None, q_episodic=0):
+        q = self.fc(x)
         return q
 
     def episodic_net(self, h_trj, is_learning=False):
         fh_trj = self.random_map(h_trj[0][0])
-        fh_trj = torch.as_tensor(fh_trj)
-
         q_estimates = self.trjmem.read(fh_trj, is_learning=is_learning)
         return q_estimates
 
@@ -254,7 +243,7 @@ class DQNBase(nn.Module):
 
     def add_trj(self, h_trj, R, step, episode):
         h_trj = h_trj[0][0]
-        hkey = torch.as_tensor(h_trj)
+        hkey = torch.FloatTensor(h_trj)
         if USE_CUDA:
             hkey = hkey.cuda()
         hkey = self.random_map(hkey)
@@ -262,11 +251,6 @@ class DQNBase(nn.Module):
         if embedding_index is None:
             self.trjmem.insert(hkey, R.unsqueeze(0))
 
-            if self.insert_size>0:
-                if len(self.last_inserts) > self.insert_size:
-                    self.last_inserts.sort()
-                    self.last_inserts = self.last_inserts[1:-1]
-                self.last_inserts.append(R.unsqueeze(0))
             if episode>self.num_warm_up:
                 try:
                     self.trjmem.write(hkey, R.unsqueeze(0))
@@ -279,69 +263,8 @@ class DQNBase(nn.Module):
                 except Exception as e:
                     print(e)
 
-    def compute_reward_loss(self, last_h_trj, traj_buffer, optimizer, batch_size, noise=0.1):
-        sasr = random.choices(traj_buffer, k=batch_size-1)
-        sasr.append(traj_buffer[-1])
 
-        X = []
-        y = []
-        y2 = []
-        hs1 = []
-        hs2 = []
-        for s1,h, a,s2,r in sasr:
-            s1 = torch.as_tensor(s1).float()
-            s2 = torch.as_tensor(s2).float()
-            r = torch.FloatTensor([r]).unsqueeze(0)
-
-            if USE_CUDA:
-                s1 = s1.cuda()
-                s2 = s2.cuda()
-            if len(s1.shape) == 1:
-                s1 = s1.unsqueeze(0)
-                s2 = s2.unsqueeze(0)
-
-            x = self.features(s1.unsqueeze(0))
-            x = self.flatten(x)
-            x = self.proj(x)
-            x = self.make_trj_input(x, a)
-
-            x2 = self.features(s2.unsqueeze(0))
-            x2 = self.flatten(x2)
-            x2 = self.proj(x2)
-            x2 = self.make_trj_input(x2, a)
-
-            if noise>0:
-                if random.random()>0.5:
-                    X.append(F.dropout(x, p=noise))
-                else:
-                    noise_tensor = ((torch.max(torch.abs(x))*noise)**0.5)*torch.randn(x.shape).to(device=x.device)
-                    if USE_CUDA:
-                       noise_tensor = torch.tensor(noise_tensor).cuda()
-                    X.append(x + noise_tensor.float())
-            else:
-                X.append(x)
-
-            y.append(x)
-
-            y2.append(torch.cat([x2, r.to(device=x2.device)], dim=-1))
-
-            hs1.append(torch.tensor(h[0]).to(device=last_h_trj[0].device))
-            hs2.append(torch.tensor(h[1]).to(device=last_h_trj[0].device))
-        X = torch.stack(X, dim=0)
-        y = torch.stack(y, dim=0)
-        y2 = torch.stack(y2, dim=0).squeeze(1)
-        cur_h_trj = (torch.cat(hs1, dim=1),
-                     torch.cat(hs2, dim=1))
-
-
-        pr = self.reward_model(torch.cat([X.squeeze(1), cur_h_trj[0][0]],dim=-1))
-        l2 = mse_criterion(pr, y2[:, self.feature_size + self.num_actions:])
-        optimizer.zero_grad()
-        l2.backward()
-        optimizer.step()
-        return l2
-
-    def compute_rec_loss(self, last_h_trj, traj_buffer, optimizer, batch_size, noise=0.5):
+    def compute_rec_reward_loss(self, last_h_trj, traj_buffer, optimizer, batch_size, noise=0.5):
         sas = random.choices(traj_buffer, k=batch_size-1)
         sas.append(traj_buffer[-1])
         X = []
@@ -376,7 +299,7 @@ class DQNBase(nn.Module):
             else:
                 noise_tensor = ((torch.max(torch.abs(x))*noise)**0.5)*torch.randn(x.shape).to(device=x.device)
                 if USE_CUDA:
-                    noise_tensor = torch.tensor(noise_tensor).cuda()
+                    noise_tensor = noise_tensor.cuda()
                 X.append(x + noise_tensor.float())
 
             y.append(x)
@@ -393,17 +316,23 @@ class DQNBase(nn.Module):
 
         y_p, _ = self.trj_model(X.squeeze(1), last_h_trj)
         y_p = self.trj_out(y_p)
-
         l1 = mse_criterion(y_p[:, :self.feature_size + self.num_actions], y2[:, :self.feature_size + self.num_actions])
 
+        cur_h_trj = (torch.cat(hs1, dim=1),
+                     torch.cat(hs2, dim=1))
+        pr = self.reward_model(torch.cat([X.squeeze(1), cur_h_trj[0][0]],dim=-1))
+
+       
+        l2 = mse_criterion(pr, y2[:, self.feature_size + self.num_actions:])
 
         optimizer.zero_grad()
-        l1.backward(retain_graph=True)
-        torch.nn.utils.clip_grad_norm(self.parameters(), 10)
+        l = l1+l2
+        l.backward()
+        torch.nn.utils.clip_grad_norm(self.parameters(), 0.5)
         optimizer.step()
-        return l1
+        return l, l1, l2
     
-    def act(self, state, epsilon, h_trj =None, episode=0):
+    def act(self, state, epsilon, h_trj =None, episode=0, use_mem=1.0):
         """
         Parameters
         ----------
@@ -416,7 +345,7 @@ class DQNBase(nn.Module):
             action_e = None
             with torch.no_grad():
                 if self.use_mem:
-                    q_value, qs, qe, x = self.forward(state, h_trj, episode, use_mem=1)
+                    q_value, qs, qe, x = self.forward(state, h_trj, episode, use_mem=use_mem)
                     action_s = qs.max(1)[1].item()
                     action_e = qe.max(1)[1].item()
                 else:
@@ -438,18 +367,9 @@ class DQNBase(nn.Module):
             x = self.proj(x)
 
             action = random.randrange(self.num_actions)
-
-
-
         y_trj, h_trj = self.trj_model(self.make_trj_input(x, action), h_trj)
         return action, h_trj, y_trj
 
-
-    def get_pivot_lastinsert(self):
-        if len(self.last_inserts)>0:
-            return min(self.last_inserts)
-        else:
-            return -10000000
 
     def update_noisy_modules(self):
         if self.noisy:
@@ -480,9 +400,9 @@ class DuelingDQN(DQNBase):
             self.Linear(512, 1)
         )
 
-    def forward(self, x, h_trj=None, episode=0, use_mem=1.0, target=0,  r=None, a=None, is_learning=False):
+    def forward(self, x, h_trj=None, episode=0, use_mem=1.0,  r=None, a=None, is_learning=False):
         if self.use_mem:
-            return self.forward_mem(x, h_trj, episode=0, use_mem=1.0, target=0, r=r, a=a, is_learning=is_learning)
+            return self.forward_mem(x, h_trj, episode=0, use_mem=1.0, r=r, a=a, is_learning=is_learning)
         else:
             x = self.features(x)
             x = self.flatten(x)
@@ -490,7 +410,7 @@ class DuelingDQN(DQNBase):
             value = self.value(x)
             return value + advantage - advantage.mean(1, keepdim=True)
 
-    def semantic_net(self, x, h_trj=None, q_episodic=0, target=0):
+    def semantic_net(self, x, h_trj=None, q_episodic=0):
         # x = self.features(x)
         # x = self.flatten(x)
         advantage = self.advantage(x)

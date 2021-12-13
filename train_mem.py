@@ -44,11 +44,8 @@ def train(env, env_test, args, writer):
     action_deque = deque(maxlen=args.multi_step)
 
     optimizer = optim.Adam(current_model.parameters(), lr=args.lr, eps=1e-4)
-    # optimizer = optim.RMSprop(current_model.parameters(), lr=0.000625, alpha=0.95, momentum=0.95, eps=0.01)
-    if args.use_mem:
-        optimizer_rec = optim.Adam(current_model.parameters(), lr=args.lr)
-        optimizer_reward = optim.Adam(current_model.reward_model.parameters())
-
+    optimizer_rec = optim.Adam(current_model.parameters(), lr=args.lr, eps=1e-4)
+    
 
 
     reward_list, length_list, loss_list = [], [], []
@@ -56,6 +53,7 @@ def train(env, env_test, args, writer):
     episode_reward = 0
     true_episode_reward = 0
     episode_length = 0
+    laste_length = deque(maxlen=20)
     episode_num = 0
 
     prev_time = time.time()
@@ -71,6 +69,9 @@ def train(env, env_test, args, writer):
 
     h_trj = current_model.trj_model.create_new_state(1)
     save_model(current_model, args)
+    decay_read = 0
+    if args.read_interval_rate<0:
+        decay_read = 1
 
     for frame_idx in tqdm(range(1, args.max_frames + 1)):
         if args.render:
@@ -81,7 +82,10 @@ def train(env, env_test, args, writer):
             target_model.sample_noise()
 
         epsilon = eplan.get_eps(frame_idx)
-        action, nh_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), epsilon,h_trj, episode=episode_num)
+        if decay_read:
+            args.read_interval_rate = 1-frame_idx*1.0/args.max_frames
+            
+        action, nh_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), epsilon, h_trj, episode=episode_num, use_mem=args.read_interval_rate)
 
         next_state, reward, done, _ = env.step(action)
         true_reward = reward
@@ -102,7 +106,9 @@ def train(env, env_test, args, writer):
 
 
             traj_buffer.append((n_state, (h_trj[0].detach().cpu().numpy(),h_trj[1].detach().cpu().numpy()), n_action, next_state, reward))
-            h_trj = nh_trj
+            h_trj =  nh_trj #(nh_trj[0].detach(), nh_trj[1].detach())
+
+
 
         state = next_state
         episode_reward += reward
@@ -110,6 +116,8 @@ def train(env, env_test, args, writer):
         episode_length += 1
 
         if done:
+            laste_length.append(episode_length)
+            args.write_interval = int(args.write_interval_rate*np.mean(list(laste_length)))
             state_buffer.append(((h_trj[0].detach().cpu().numpy(),h_trj[1].detach().cpu().numpy()), episode_reward, episode_length))
 
             add_mem = 0
@@ -118,25 +126,20 @@ def train(env, env_test, args, writer):
             for h, R, trj_step in state_buffer:
                 RR = episode_reward - R
                 if RR > args.min_reward:
-                    if len(current_model.last_inserts) >= args.insert_size > 0 and RR < current_model.get_pivot_lastinsert():  # and RR<max(model.last_inserts):
-                        pass
-                    else:
-                        current_model.add_trj(h, torch.as_tensor(RR), trj_step, episode_num)
-                        add_mem = 1
-
-
+                    current_model.add_trj(h, torch.as_tensor(RR), trj_step, episode_num)
+                    add_mem = 1
                 cc += 1
             if add_mem == 1:
                 current_model.trjmem.commit_insert()
 
-            if args.use_mem and frame_idx < args.rec_period:
-                l2 = current_model.compute_reward_loss(h_trj, traj_buffer, optimizer_reward, args.batch_size_reward,
-                                               noise=0)
-                rec_l2s.append(l2.data.item())
-                l1 = current_model.compute_rec_loss(h_trj, traj_buffer, optimizer_rec, args.batch_size_plan,
+            if args.use_mem and  args.rec_rate>0 and frame_idx < args.rec_period:
+            
+               
+                l, l1, l2 = current_model.compute_rec_reward_loss((h_trj[0].detach(), h_trj[1].detach()), traj_buffer, optimizer_rec, args.batch_size_plan,
                                                       noise=args.rec_noise)
-                aux_loss.append((l1+l2).data.item())
-                rec_l1s.append(l1.data.item())
+                aux_loss.append(l.item())
+                rec_l1s.append(l1.item())
+                rec_l2s.append(l2.item())
 
 
             h_trj = current_model.trj_model.create_new_state(1)
@@ -148,8 +151,6 @@ def train(env, env_test, args, writer):
             writer.add_scalar("data/episode_reward", true_episode_reward, frame_idx)
 
             writer.add_scalar('Mem/num stored', current_model.trjmem.get_mem_size(), int(frame_idx))
-            # writer.add_scalar('Mem/alpha', F.sigmoid(torch.norm(current_model.alpha).detach()).item(), int(frame_idx))
-            writer.add_scalar('Mem/min last', current_model.get_pivot_lastinsert(), int(frame_idx))
             if current_model.m_contr:
                 writer.add_scalar('Mem/contrib', np.mean(current_model.m_contr), int(frame_idx))
 
@@ -173,16 +174,13 @@ def train(env, env_test, args, writer):
         else:
             if args.use_mem and frame_idx % args.write_interval == 0 and len(traj_buffer):
                 state_buffer.append(((h_trj[0].detach().cpu().numpy(),h_trj[1].detach().cpu().numpy()), episode_reward, episode_length))
-                if args.rec_rate>0:
-                    l2 = current_model.compute_reward_loss(h_trj, traj_buffer, optimizer_reward, args.batch_size_reward,
-                                                   noise=0)
-                    rec_l2s.append(l2.data.item())
+                    
                 if random.random() < args.rec_rate and frame_idx<args.rec_period:
-                    l1 = current_model.compute_rec_loss(h_trj, traj_buffer, optimizer_rec, args.batch_size_plan, noise=args.rec_noise)
-                    aux_loss.append((l1+l2).data.item())
-                    rec_l1s.append(l1.data.item())
+                    l, l1, l2 = current_model.compute_rec_reward_loss((h_trj[0].detach(), h_trj[1].detach()), traj_buffer, optimizer, args.batch_size_plan, noise=args.rec_noise)
+                    aux_loss.append(l.item())
+                    rec_l1s.append(l1.item())
+                    rec_l2s.append(l2.item())
 
-                h_trj = (h_trj[0].detach(), h_trj[1].detach())
 
         if args.train_freq>0 and len(replay_buffer) > args.learning_start and frame_idx % args.train_freq == 0:
             beta = beta_by_frame(frame_idx)
@@ -194,8 +192,8 @@ def train(env, env_test, args, writer):
             update_target(current_model, target_model)
 
         if frame_idx % args.evaluation_interval == 0:
-            cur_avg_reward_tr = print_log(frame_idx, prev_frame, prev_time, reward_list, length_list, loss_list)
-            print(f"task {args.env} best test {best_avg_reward}")
+            cur_avg_reward_tr = print_log(frame_idx, prev_frame, prev_time, reward_list, length_list, loss_list, args.write_interval)
+            print(f"task {args.env} best test {best_avg_reward} with read interval {args.read_interval_rate}")
             reward_list.clear(), length_list.clear(), loss_list.clear()
             prev_frame = frame_idx
             prev_time = time.time()
@@ -205,6 +203,7 @@ def train(env, env_test, args, writer):
         if frame_idx % (args.evaluation_interval*10) == 0:
             test_args = args
             test_args.num_test = 10
+            current_model.eval()
             testr = test.test(env_test, test_args, current_model)
             current_model.train()
 
@@ -216,8 +215,9 @@ def train(env, env_test, args, writer):
                 sdir = save_model(current_model, args)
                 best_avg_reward = cur_avg_reward
                 print(f"save model to {sdir}")
+        if args.use_mem:
+            current_model.clone_mem(target_model)
 
-        current_model.clone_mem(target_model)
 
 
 
@@ -244,11 +244,10 @@ def compute_td_loss(current_model, target_model, replay_buffer, optimizer, args,
 
         hx = torch.tensor(h_trj[:, 0, 0, 0]).to(device=state.device).unsqueeze(0)
         cx = torch.tensor(h_trj[:, 1, 0, 0]).to(device=state.device).unsqueeze(0)
-        q_values, q1, q2, _ = current_model(state, (hx, cx), episode, use_mem=1, target=0, r=reward, a=action, is_learning=True)
+        q_values, q1, q2, _ = current_model(state, (hx, cx), episode, use_mem=args.read_interval_rate, r=reward, a=action, is_learning=True)
         nhx = torch.tensor(nh_trj[:, 0, 0, 0]).to(device=state.device).unsqueeze(0)
         ncx = torch.tensor(nh_trj[:, 1, 0, 0]).to(device=state.device).unsqueeze(0)
-        # next_q_values = self.forward(next_state, (nhx, ncx), episode, use_mem=1)
-        target_next_q_values, qn1, qn2, _ = target_model(next_state, (nhx, ncx), episode, use_mem=1, target=1, is_learning=True)
+        target_next_q_values, qn1, qn2, _ = target_model(next_state, (nhx, ncx), episode, use_mem=args.read_interval_rate, is_learning=True)
 
 
         # q_values = current_model(state)
@@ -257,7 +256,7 @@ def compute_td_loss(current_model, target_model, replay_buffer, optimizer, args,
         q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
 
         if args.double:
-            next_q_values,_,_,_ = current_model(next_state, (nhx, ncx), episode, use_mem=1, target=0, is_learning=True)
+            next_q_values,_,_,_ = current_model(next_state, (nhx, ncx), episode, use_mem=1, is_learning=True)
             next_actions = next_q_values.max(1)[1].unsqueeze(1)
             next_q_value = target_next_q_values.gather(1, next_actions).squeeze(1)
         else:

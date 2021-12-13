@@ -42,7 +42,6 @@ def test(env, args, current_model=None):
             current_model = DQN(env, args).to(args.device)
 
         load_model(current_model, args)
-    current_model.eval()
     num_params = 0
     for p in current_model.parameters():
         num_params += p.data.view(-1).size(0)
@@ -60,7 +59,8 @@ def test(env, args, current_model=None):
 
 
         br = current_model.bstr_rate
-        #current_model.bstr_rate = 0
+        if args.use_mem:
+            current_model.bstr_rate = 0
         h_trj = current_model.trj_model.create_new_state(1)
 
         step=0
@@ -111,9 +111,10 @@ def test(env, args, current_model=None):
                     imgs.append(img)
 
 
+            with torch.no_grad():
 
-            action, h_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), 0, h_trj,
-                                                      episode=1000000)
+                action, h_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), 0, h_trj,
+                                                          episode=1000000,  use_mem=args.read_interval_rate)
 
             next_state, reward, done, _ = env.step(action)
 
@@ -123,6 +124,8 @@ def test(env, args, current_model=None):
             step+=1
             # print(episode_length, episode_reward)
             if done:
+                if args.use_mem == 1:
+                    current_model.bstr_rate = br
                 break
         if args.save_render and episode_reward==3:
             pimg = np.asarray(imgs)
@@ -147,37 +150,3 @@ def test(env, args, current_model=None):
     print("True Test Result - Reward {} Length {}".format(r, l))
 
     return r
-
-
-def test_online(env, args, current_model, numt=100):
-
-    for n in range(numt):
-        episode_reward = 0
-        episode_length = 0
-
-        state = env.reset()
-        rewards = []
-        lens = []
-
-        h_trj = current_model.trj_model.create_new_state(1)
-        while True:
-            if args.render and n==numt-1:
-                env.render()
-
-            action, nh_trj, y_trj = current_model.act(torch.FloatTensor(state).to(args.device), 0, h_trj,
-                                                      episode=1000000)
-
-            next_state, reward, done, _ = env.step(action)
-
-            state = next_state
-            episode_reward += reward
-            episode_length += 1
-
-            if done:
-                break
-        rewards.append(episode_reward)
-        lens.append(episode_length)
-    r = np.mean(rewards)
-    l = np.mean(lens)
-    print("Test Result - Reward {} Length {}".format(r, l))
-    return r, l

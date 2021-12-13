@@ -119,14 +119,14 @@ def create_log_dir(args):
     log_dir = os.path.join(save_dir, log_dir+args.env)
     return log_dir
 
-def print_log(frame, prev_frame, prev_time, reward_list, length_list, loss_list):
+def print_log(frame, prev_frame, prev_time, reward_list, length_list, loss_list, write_interval=0):
     fps = (frame - prev_frame) / (time.time() - prev_time)
     avg_reward = np.mean(reward_list)
     avg_length = np.mean(length_list)
     avg_loss = np.mean(loss_list) if len(loss_list) != 0 else 0.
 
-    print("Frame: {:<8} FPS: {:.2f} Avg. Reward: {:.2f} Avg. Length: {:.2f} Avg. Loss: {:.2f}".format(
-        frame, fps, avg_reward, avg_length, avg_loss
+    print("Frame: {:<8} FPS: {:.2f} Avg. Reward: {:.2f} Avg. Length: {:.2f} Avg. Interval: {:.2f}  Avg. Loss: {:.2f}".format(
+        frame, fps, avg_reward, avg_length, write_interval, avg_loss
     ))
     return avg_reward
 

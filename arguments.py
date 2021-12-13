@@ -4,7 +4,7 @@ import random
 import time
 
 def get_args():
-    parser = argparse.ArgumentParser(description='DQN')
+    parser = argparse.ArgumentParser(description='MBEC++(MBEC+DQN)')
 
     # Basic Arguments
     parser.add_argument('--seed', type=int, default=int(time.time())%1000,
@@ -23,7 +23,7 @@ def get_args():
                        help='Number of frames per episode')
     parser.add_argument('--buffer-size', type=int, default=1000000, metavar='CAPACITY',
                         help='Maximum memory buffer size')
-    parser.add_argument('--update-target', type=int, default=5000, metavar='STEPS',
+    parser.add_argument('--update-target', type=int, default=1000, metavar='STEPS',
                         help='Interval of target network update')
     parser.add_argument('--train-freq', type=int, default=4, metavar='STEPS',
                         help='Number of steps between optimization step')
@@ -43,13 +43,13 @@ def get_args():
                         help="batch size planning model")
     parser.add_argument("--batch_size_reward", type=int, default=4,
                         help="batch size planning model")
-    parser.add_argument("--reward_hidden_size", type=int, default=32,
+    parser.add_argument("--reward_hidden_size", type=int, default=8,
                         help="batch size planning model")
     parser.add_argument("--hidden_size", type=int, default=16,
                         help="RNN hidden")
     parser.add_argument("--mem_mode", type=str, default="",
                         help="memory type")
-    parser.add_argument("--mem_dim", type=int, default=5,
+    parser.add_argument("--mem_dim", type=int, default=8,
                         help="memory size")
     parser.add_argument("--memory_size", type=int, default=10000,
                         help="memory size")
@@ -61,19 +61,23 @@ def get_args():
                         help="no dynamic consolidation")
     parser.add_argument("--min_reward", type=float, default=-1000000000,
                         help="minimum reward of env")
-    parser.add_argument("--write_interval", type=int, default=50,
+    parser.add_argument("--write_interval", type=int, default=200,
                         help="interval for memory writing")
+    parser.add_argument("--write_interval_rate", type=float, default=0.1,
+                        help="interval for memory writing")
+    parser.add_argument("--read_interval_rate", type=float, default=0.2,
+                        help="interval for memory reading")
     parser.add_argument("--write_lr", type=float, default=0.5,
                         help="learning rate of writing")
     parser.add_argument("--bstr_rate", type=float, default=0.1,
                         help="learning rate of writing")
     parser.add_argument("--rec_rate", type=float, default=0.1,
                         help="rate of reconstruction learning")
-    parser.add_argument("--rec_noise", type=float, default=0.1,
+    parser.add_argument("--rec_noise", type=float, default=0.5,
                         help="rate of reconstruction noise")
     parser.add_argument("--rec_period", type=int, default=5e6,
                         help="period of reconstruction learning")
-    parser.add_argument("--num_warm_up", type=int, default=50,
+    parser.add_argument("--num_warm_up", type=int, default=20,
                         help="number of episode warming up memory")
     parser.add_argument("--run_id", default="r1",
                         help="r1,r2,r3")
@@ -139,7 +143,7 @@ def get_args():
     # Optimization Arguments
     parser.add_argument('--lr', type=float, default=1e-4, metavar='η',
                         help='Learning rate')
-    parser.add_argument('--clip_grad', type=int, default=0.5,
+    parser.add_argument('--clip_grad', type=int, default=100,
                         help='clip gradient')
 
     args = parser.parse_args()
